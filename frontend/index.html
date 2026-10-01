@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Voice Booker — Dashboard</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #0f1115; color: #e8eaf0; margin: 0; }
+  header { padding: 20px 24px; border-bottom: 1px solid #222; display: flex; justify-content: space-between; align-items: center; }
+  main { display: grid; grid-template-columns: 1.2fr 1fr; gap: 16px; padding: 20px 24px; max-width: 1100px; margin: 0 auto; }
+  .card { background: #171a21; border: 1px solid #262b36; border-radius: 12px; padding: 16px; }
+  h2 { margin: 0 0 12px; font-size: 16px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  td, th { padding: 8px; border-bottom: 1px solid #242a35; text-align: left; }
+  button { background: #5b8cff; color: white; border: 0; border-radius: 8px; padding: 8px 12px; cursor: pointer; }
+  button.ghost { background: #242b38; }
+  input, textarea, select { width: 100%; background: #0f1319; color: #e8eaf0; border: 1px solid #2a3140; border-radius: 8px; padding: 8px; margin: 4px 0 10px; }
+  .pill { font-size: 12px; padding: 2px 8px; border-radius: 20px; background: #233; }
+  .ok { color: #7ee2a8; } .muted { color: #9aa3b2; font-size: 13px; }
+  pre { background: #0c0f14; padding: 10px; border-radius: 8px; white-space: pre-wrap; font-size: 13px; }
+  @media (max-width: 800px) { main { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <div><strong>📞 Voice Booker</strong> <span class="muted" id="health">connecting…</span></div>
+  <div><button class="ghost" onclick="loadAll()">Refresh</button></div>
+</header>
+<main>
+  <div>
+    <div class="card">
+      <h2>Upcoming bookings</h2>
+      <table><thead><tr><th>When</th><th>Service</th><th>Customer</th><th></th></tr></thead>
+      <tbody id="appts"></tbody></table>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <h2>Availability tomorrow</h2>
+      <div id="slots" class="muted">—</div>
+    </div>
+  </div>
+  <div>
+    <div class="card">
+      <h2>Test the voice agent (no phone needed)</h2>
+      <textarea id="transcript" rows="3">Hi, I want a haircut tomorrow at 3pm, my name is Alex</textarea>
+      <input id="phone" placeholder="Caller phone (optional)" value="+15551234567" />
+      <button onclick="simulate()">Simulate call</button>
+      <pre id="simOut" class="muted">Agent reply will appear here…</pre>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <h2>Manual booking</h2>
+      <select id="svc"></select>
+      <input id="cname" placeholder="Customer name" />
+      <input id="cphone" placeholder="Customer phone" />
+      <input id="cwhen" type="datetime-local" />
+      <button onclick="bookManual()">Book</button>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <h2>Twilio wiring</h2>
+      <p class="muted">1. Run backend + ngrok. 2. Twilio number → Voice webhook POST <code>/voice/incoming</code>. 3. Call the number and say a booking.</p>
+      <pre>ngrok http 8000
+# webhook:
+https://&lt;ngrok&gt;.ngrok.io/voice/incoming</pre>
+    </div>
+  </div>
+</main>
+<script>
+const API = 'http://127.0.0.1:8000';
+async function loadAll() {
+  const h = await fetch(API + '/api/health').then(r => r.json()).catch(() => null);
+  document.getElementById('health').textContent = h ? `● ${h.ai} mode` : '● backend offline — run uvicorn';
+  const ap = await fetch(API + '/api/appointments?business_id=1').then(r => r.json()).catch(() => ({appointments: []}));
+  document.getElementById('appts').innerHTML = ap.appointments.map(a => `<tr>
+    <td>${a.starts_at.replace('T',' ')}<br><span class="muted">${a.status}</span></td>
+    <td>${a.service_name || a.service_id || ''}</td>
+    <td>${a.customer_name}<br><span class="muted">${a.customer_phone}</span></td>
+    <td>${a.status === 'booked' ? `<button class="ghost" onclick="cancelAppt(${a.id})">Cancel</button>` : ''}</td>
+  </tr>`).join('') || '<tr><td colspan=4 class="muted">No bookings yet — simulate a call →</td></tr>';
+  const sv = await fetch(API + '/api/services?business_id=1').then(r => r.json()).catch(() => ({services: []}));
+  document.getElementById('svc').innerHTML = sv.services.map(s => `<option value="${s.id}">${s.name} (${s.duration_min}m)</option>`).join('');
+  const tmr = new Date(Date.now() + 864e5).toISOString().slice(0, 10);
+  const av = await fetch(API + `/api/availability?business_id=1&date=${tmr}T00:00:00`).then(r => r.json()).catch(() => null);
+  document.getElementById('slots').textContent = av ? av.slots.slice(0, 12).join(', ') + (av.slots.length > 12 ? ` +${av.slots.length - 12} more` : '') : '—';
+}
+async function simulate() {
+  const body = { business_id: 1, transcript: document.getElementById('transcript').value, caller_phone: document.getElementById('phone').value };
+  const r = await fetch(API + '/api/simulate-call', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) }).then(r => r.json());
+  document.getElementById('simOut').textContent = 'AGENT: ' + r.reply + '\n\nParsed: ' + JSON.stringify(r.parsed);
+  loadAll();
+}
+async function bookManual() {
+  const sid = document.getElementById('svc').value;
+  await fetch(API + '/api/appointments', { method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ business_id: 1, service_id: Number(sid), customer_name: document.getElementById('cname').value, customer_phone: document.getElementById('cphone').value, starts_at: document.getElementById('cwhen').value }) });
+  loadAll();
+}
+async function cancelAppt(id) {
+  await fetch(API + '/api/appointments/' + id, { method: 'DELETE' });
+  loadAll();
+}
+loadAll();
+</script>
+</body>
+</html>
