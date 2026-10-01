@@ -9,14 +9,23 @@ Run:
 
 Dashboard: open ../frontend/index.html (calls http://127.0.0.1:8000)
 Twilio test without a phone: POST /api/simulate-call {"transcript": "..."}
+Voicemail flow: missed calls hit POST /voice/voicemail-greeting (says + <Record>),
+  recording posts to POST /voice/voicemail which transcribes (Whisper when
+  OPENAI_API_KEY is set, else Twilio TranscriptionText) then auto-books via
+  run_booking(source="voicemail").
+Manual voicemail test: POST /api/voicemail/process {"transcript": "..."}
+  or POST /api/voicemail/upload with an audio file.
 """
+import base64
+import io
 import os
 import re
 import sqlite3
+import urllib.request
 from datetime import datetime, timedelta
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Form, Request
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 
@@ -82,6 +91,19 @@ def init_db():
           business_id INTEGER REFERENCES businesses(id) ON DELETE SET NULL,
           transcript TEXT NOT NULL DEFAULT '',
           agent_reply TEXT NOT NULL DEFAULT '',
+          appointment_id INTEGER REFERENCES appointments(id) ON DELETE SET NULL,
+          created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS voicemails (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          call_sid TEXT NOT NULL DEFAULT '',
+          recording_sid TEXT NOT NULL DEFAULT '',
+          business_id INTEGER REFERENCES businesses(id) ON DELETE SET NULL,
+          from_phone TEXT NOT NULL DEFAULT '',
+          to_phone TEXT NOT NULL DEFAULT '',
+          recording_url TEXT NOT NULL DEFAULT '',
+          transcript TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'processed',
           appointment_id INTEGER REFERENCES appointments(id) ON DELETE SET NULL,
           created_at TEXT NOT NULL
         );
@@ -213,6 +235,53 @@ def try_openai_extract(transcript: str, service_names: list[str]) -> dict | None
         return None  # never break a live call on LLM errors
 
 
+def fetch_recording_bytes(recording_url: str) -> tuple[bytes | None, str]:
+    """Download a Twilio recording. Returns (bytes, filename). None on failure.
+
+    Twilio RecordingUrl without an extension returns mp3 by default when
+    fetched with Accept: audio/mpeg, or you can append .mp3. We try the URL
+    as-is first, then with .mp3 suffix.
+    """
+    if not recording_url:
+        return None, "voicemail.mp3"
+    candidates = [recording_url]
+    if not re.search(r"\.(mp3|wav)$", recording_url, re.I):
+        candidates.append(recording_url.rstrip("/") + ".mp3")
+    sid = os.environ.get("TWILIO_ACCOUNT_SID", "")
+    token = os.environ.get("TWILIO_AUTH_TOKEN", "")
+    for url in candidates:
+        try:
+            req = urllib.request.Request(url, headers={"Accept": "audio/mpeg"})
+            if sid and token:
+                creds = base64.b64encode(f"{sid}:{token}".encode()).decode()
+                req.add_header("Authorization", f"Basic {creds}")
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                data = resp.read()
+                if data and len(data) > 1000:
+                    ext = "mp3" if "mp3" in url else "wav" if url.endswith(".wav") else "mp3"
+                    return data, f"voicemail.{ext}"
+        except Exception:
+            continue
+    return None, "voicemail.mp3"
+
+
+def transcribe_audio_bytes(audio: bytes, filename: str = "voicemail.mp3") -> str | None:
+    """Transcribe audio with OpenAI Whisper. None = unavailable/failed."""
+    if not audio or not os.environ.get("OPENAI_API_KEY"):
+        return None
+    try:
+        from openai import OpenAI
+
+        client = OpenAI()
+        buf = io.BytesIO(audio)
+        buf.name = filename
+        resp = client.audio.transcriptions.create(model="whisper-1", file=buf)
+        text = (getattr(resp, "text", "") or "").strip()
+        return text or None
+    except Exception:
+        return None
+
+
 def resolve_date(label: str | None, now: datetime) -> datetime:
     label = (label or "").lower()
     if label == "tomorrow":
@@ -332,6 +401,91 @@ def run_booking(
     return {"reply": reply, "appointment": dict(appt), "parsed": parsed}
 
 
+def process_voicemail(
+    business_id: int = 1,
+    transcript: str = "",
+    audio_bytes: bytes | None = None,
+    audio_filename: str = "voicemail.mp3",
+    recording_url: str = "",
+    caller_phone: str = "",
+    call_sid: str = "",
+    recording_sid: str = "",
+    to_phone: str = "",
+) -> dict:
+    """Voicemail in -> text out -> booking in. Returns full result dict.
+
+    Transcript resolution order:
+      1. explicit `transcript` argument (dashboard paste or Twilio TranscriptionText)
+      2. Whisper transcription of `audio_bytes` (uploaded file)
+      3. download + Whisper transcription of `recording_url` (Twilio Record callback)
+    Then runs run_booking(source="voicemail") and stores a voicemails row.
+    Works offline (rules extraction) when no OPENAI_API_KEY is set, as long as
+    a transcript is supplied directly.
+    """
+    # resolve business from the dialed number when caller didn't pass an id
+    if to_phone:
+        try:
+            b = business_by_phone(to_phone)
+            if b:
+                business_id = b["id"]
+        except Exception:
+            pass
+
+    text = (transcript or "").strip()
+    transcribed = False
+    if not text and audio_bytes:
+        t = transcribe_audio_bytes(audio_bytes, audio_filename)
+        if t:
+            text, transcribed = t, True
+    if not text and recording_url:
+        blob, fname = fetch_recording_bytes(recording_url)
+        if blob:
+            t = transcribe_audio_bytes(blob, fname)
+            if t:
+                text, transcribed = t, True
+
+    con = db()
+    if not text:
+        cur = con.execute(
+            """INSERT INTO voicemails
+               (call_sid, recording_sid, business_id, from_phone, to_phone,
+                recording_url, transcript, status, appointment_id, created_at)
+               VALUES (?,?,?,?,?,?, '', 'failed-no-transcript', NULL, ?)""",
+            (call_sid, recording_sid, business_id, caller_phone, to_phone,
+             recording_url, datetime.now().isoformat(timespec="seconds")),
+        )
+        con.commit()
+        vm_id = cur.lastrowid
+        con.close()
+        hint = "voicemail audio could not be transcribed"
+        if not os.environ.get("OPENAI_API_KEY"):
+            hint += " (set OPENAI_API_KEY for Whisper, or post transcript text directly)"
+        return {
+            "ok": False, "error": hint, "transcript": "",
+            "transcribed": transcribed, "reply": None,
+            "appointment": None, "parsed": None, "voicemail_id": vm_id,
+        }
+
+    result = run_booking(business_id, text, caller_phone=caller_phone,
+                         call_sid=call_sid, source="voicemail")
+    status = "processed" if result.get("appointment") else "failed-no-slots"
+    cur = con.execute(
+        """INSERT INTO voicemails
+           (call_sid, recording_sid, business_id, from_phone, to_phone,
+            recording_url, transcript, status, appointment_id, created_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?)""",
+        (call_sid, recording_sid, business_id, caller_phone, to_phone,
+         recording_url, text, status,
+         result["appointment"]["id"] if result.get("appointment") else None,
+         datetime.now().isoformat(timespec="seconds")),
+    )
+    con.commit()
+    vm_id = cur.lastrowid
+    con.close()
+    return {"ok": True, "transcript": text, "transcribed": transcribed,
+            **result, "voicemail_id": vm_id}
+
+
 def twiml_say_gather(say: str, action: str = "/voice/process") -> str:
     return (
         '<?xml version="1.0" encoding="UTF-8"?>'
@@ -349,6 +503,7 @@ def health():
     return {
         "ok": True,
         "ai": "openai" if os.environ.get("OPENAI_API_KEY") else "offline-rules",
+        "stt": "whisper" if os.environ.get("OPENAI_API_KEY") else "transcript-only",
         "twilio": bool(os.environ.get("TWILIO_ACCOUNT_SID")),
     }
 
@@ -436,6 +591,50 @@ async def simulate_call(req: Request):
     return result
 
 
+@app.get("/api/voicemails")
+def list_voicemails(business_id: int = 1):
+    con = db()
+    rows = con.execute(
+        "SELECT v.*, a.starts_at AS appointment_starts_at FROM voicemails v"
+        " LEFT JOIN appointments a ON a.id = v.appointment_id"
+        " WHERE v.business_id = ? ORDER BY v.id DESC LIMIT 200",
+        (business_id,),
+    ).fetchall()
+    con.close()
+    return {"voicemails": [dict(r) for r in rows]}
+
+
+@app.post("/api/voicemail/process")
+async def voicemail_process(req: Request):
+    """Manual voicemail ingest: {transcript} or {recording_url} -> transcribe -> book."""
+    data = await req.json()
+    result = process_voicemail(
+        business_id=int(data.get("business_id", 1)),
+        transcript=data.get("transcript", "") or data.get("TranscriptionText", ""),
+        recording_url=data.get("recording_url", "") or data.get("RecordingUrl", ""),
+        caller_phone=data.get("caller_phone", "") or data.get("From", ""),
+        call_sid=data.get("call_sid", "") or data.get("CallSid", ""),
+        recording_sid=data.get("recording_sid", "") or data.get("RecordingSid", ""),
+        to_phone=data.get("to_phone", "") or data.get("To", ""),
+    )
+    return result
+
+
+@app.post("/api/voicemail/upload")
+async def voicemail_upload(
+    file: UploadFile = File(...), business_id: int = 1, caller_phone: str = Form(default="")
+):
+    """Upload a voicemail audio file -> Whisper transcribe -> book."""
+    audio = await file.read()
+    result = process_voicemail(
+        business_id=business_id,
+        audio_bytes=audio,
+        audio_filename=file.filename or "voicemail.mp3",
+        caller_phone=caller_phone,
+    )
+    return result
+
+
 # ---------------- Twilio voice ----------------
 @app.post("/voice/incoming")
 async def voice_incoming(To: str = Form(default=""), From: str = Form(default="")):
@@ -465,4 +664,64 @@ async def voice_process(
         '<?xml version="1.0" encoding="UTF-8"?>'
         f"<Response><Say>{result['reply']}</Say><Hangup/></Response>"
     )
+    return PlainTextResponse(xml, media_type="application/xml")
+
+
+def twiml_record_voicemail(business_name: str, action: str = "/voice/voicemail") -> str:
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        "<Response>"
+        f"<Say>Thanks for calling {business_name}. We're away right now. "
+        "Please leave your name, the service you want, and what day and time works for you, "
+        "after the beep. We'll text you a confirmation.</Say>"
+        f'<Record action="{action}" method="POST" maxLength="120" playBeep="true" '
+        'trim="trim-silence" recordingStatusCallback="/voice/voicemail" />'
+        "<Say>We didn't get your message. Goodbye!</Say>"
+        "</Response>"
+    )
+
+
+# ---------------- Twilio voicemail ----------------
+@app.post("/voice/voicemail-greeting")
+async def voice_voicemail_greeting(To: str = Form(default="")):
+    """Missed-call handler: point Twilio's busy/no-answer webhook here."""
+    b = business_by_phone(To)
+    return PlainTextResponse(twiml_record_voicemail(b["name"]), media_type="application/xml")
+
+
+@app.post("/voice/voicemail")
+async def voice_voicemail(
+    RecordingUrl: str = Form(default=""),
+    RecordingSid: str = Form(default=""),
+    CallSid: str = Form(default=""),
+    From: str = Form(default=""),
+    To: str = Form(default=""),
+    TranscriptionText: str = Form(default=""),
+    TranscriptionStatus: str = Form(default=""),
+):
+    """Twilio <Record> callback: transcribe the voicemail, extract booking, save it.
+
+    Works with or without Twilio's own transcription: if TranscriptionText is
+    present we use it directly (offline-friendly); otherwise we download the
+    recording and run Whisper when OPENAI_API_KEY is set.
+    """
+    b = business_by_phone(To)
+    result = process_voicemail(
+        business_id=b["id"],
+        transcript=TranscriptionText,
+        recording_url=RecordingUrl,
+        caller_phone=From,
+        call_sid=CallSid,
+        recording_sid=RecordingSid,
+        to_phone=To,
+    )
+    if result.get("appointment"):
+        say = result["reply"]
+    elif not result.get("transcript"):
+        say = ("Thanks for your message. Sorry, we couldn't hear it clearly. "
+               "Please call back with the service, day and time you want.")
+    else:
+        say = ("Thanks for your message. Sorry, we couldn't find a free slot. "
+               "We'll call you back to arrange a time.")
+    xml = f'<?xml version="1.0" encoding="UTF-8"?><Response><Say>{say}</Say><Hangup/></Response>'
     return PlainTextResponse(xml, media_type="application/xml")

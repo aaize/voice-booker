@@ -47,6 +47,23 @@
       <pre id="simOut" class="muted">Agent reply will appear here…</pre>
     </div>
     <div class="card" style="margin-top:16px">
+      <h2>Voicemail → auto-booking</h2>
+      <p class="muted">Paste a voicemail transcript, or upload the audio. AI extracts service + day + time and books it.</p>
+      <textarea id="vmTranscript" rows="3">Hi this is Priya, I need a color tomorrow morning, call me back at +15559876543</textarea>
+      <input id="vmPhone" placeholder="Caller phone (optional)" value="+15559876543" />
+      <button onclick="processVoicemail()">Process voicemail text</button>
+      <div style="margin-top:8px">
+        <input id="vmFile" type="file" accept="audio/*" />
+        <button class="ghost" onclick="uploadVoicemail()">Upload audio → transcribe + book</button>
+      </div>
+      <pre id="vmOut" class="muted">Voicemail result will appear here… (needs OPENAI_API_KEY for audio)</pre>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <h2>Recent voicemails</h2>
+      <table><thead><tr><th>From</th><th>Transcript</th><th>Status</th></tr></thead>
+      <tbody id="vms"></tbody></table>
+    </div>
+    <div class="card" style="margin-top:16px">
       <h2>Manual booking</h2>
       <select id="svc"></select>
       <input id="cname" placeholder="Customer name" />
@@ -56,10 +73,12 @@
     </div>
     <div class="card" style="margin-top:16px">
       <h2>Twilio wiring</h2>
-      <p class="muted">1. Run backend + ngrok. 2. Twilio number → Voice webhook POST <code>/voice/incoming</code>. 3. Call the number and say a booking.</p>
+      <p class="muted">1. Run backend + ngrok. 2. Twilio number → Voice webhook POST <code>/voice/incoming</code>. 3. Busy / no-answer webhook → POST <code>/voice/voicemail-greeting</code> (records, transcribes with Whisper, auto-books). 4. Call the number and say a booking — or let it ring to voicemail.</p>
       <pre>ngrok http 8000
-# webhook:
-https://&lt;ngrok&gt;.ngrok.io/voice/incoming</pre>
+# live answer:
+https://&lt;ngrok&gt;.ngrok.io/voice/incoming
+# voicemail (busy/no-answer):
+https://&lt;ngrok&gt;.ngrok.io/voice/voicemail-greeting</pre>
     </div>
   </div>
 </main>
@@ -80,11 +99,34 @@ async function loadAll() {
   const tmr = new Date(Date.now() + 864e5).toISOString().slice(0, 10);
   const av = await fetch(API + `/api/availability?business_id=1&date=${tmr}T00:00:00`).then(r => r.json()).catch(() => null);
   document.getElementById('slots').textContent = av ? av.slots.slice(0, 12).join(', ') + (av.slots.length > 12 ? ` +${av.slots.length - 12} more` : '') : '—';
+  const vm = await fetch(API + '/api/voicemails?business_id=1').then(r => r.json()).catch(() => ({voicemails: []}));
+  document.getElementById('vms').innerHTML = vm.voicemails.slice(0, 10).map(v => `<tr>
+    <td>${v.from_phone || '<span class="muted">unknown</span>'}<br><span class="muted">${v.appointment_starts_at ? v.appointment_starts_at.replace('T',' ') : ''}</span></td>
+    <td>${(v.transcript || '').slice(0, 90)}</td>
+    <td><span class="pill">${v.status}</span></td>
+  </tr>`).join('') || '<tr><td colspan=3 class="muted">No voicemails yet — process one above ↑</td></tr>';
 }
 async function simulate() {
   const body = { business_id: 1, transcript: document.getElementById('transcript').value, caller_phone: document.getElementById('phone').value };
   const r = await fetch(API + '/api/simulate-call', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) }).then(r => r.json());
   document.getElementById('simOut').textContent = 'AGENT: ' + r.reply + '\n\nParsed: ' + JSON.stringify(r.parsed);
+  loadAll();
+}
+async function processVoicemail() {
+  const body = { business_id: 1, transcript: document.getElementById('vmTranscript').value, caller_phone: document.getElementById('vmPhone').value };
+  const r = await fetch(API + '/api/voicemail/process', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) }).then(r => r.json());
+  document.getElementById('vmOut').textContent = r.ok ? 'TRANSCRIPT: ' + r.transcript + '\n\nAGENT: ' + r.reply + '\n\nParsed: ' + JSON.stringify(r.parsed) : 'ERROR: ' + (r.error || 'no transcript');
+  loadAll();
+}
+async function uploadVoicemail() {
+  const f = document.getElementById('vmFile').files[0];
+  if (!f) { document.getElementById('vmOut').textContent = 'Pick an audio file first.'; return; }
+  const fd = new FormData();
+  fd.append('file', f);
+  fd.append('business_id', '1');
+  fd.append('caller_phone', document.getElementById('vmPhone').value);
+  const r = await fetch(API + '/api/voicemail/upload?business_id=1', { method: 'POST', body: fd }).then(r => r.json());
+  document.getElementById('vmOut').textContent = r.ok ? 'TRANSCRIPT: ' + r.transcript + (r.transcribed ? ' (whisper)' : '') + '\n\nAGENT: ' + r.reply : 'ERROR: ' + (r.error || JSON.stringify(r));
   loadAll();
 }
 async function bookManual() {
