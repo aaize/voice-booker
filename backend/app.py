@@ -13,8 +13,13 @@ Voicemail flow: missed calls hit POST /voice/voicemail-greeting (says + <Record>
   recording posts to POST /voice/voicemail which transcribes (Whisper when
   OPENAI_API_KEY is set, else Twilio TranscriptionText) then auto-books via
   run_booking(source="voicemail").
-Manual voicemail test: POST /api/voicemail/process {"transcript": "..."}
-  or POST /api/voicemail/upload with an audio file.
+Dashboard voicemail flow (two steps, no fake data):
+  1. POST /api/voicemail/upload (or /api/voicemails/upload for several files)
+     stores the audio as pending.
+  2. POST /api/voicemail/{id}/extract for one file, or
+     POST /api/voicemail/extract-all to run AI over every pending voicemail.
+Legacy manual test: POST /api/voicemail/process {"transcript": "..."}
+  or POST /api/simulate-call {"transcript": "..."}.
 """
 import base64
 import io
@@ -22,16 +27,20 @@ import os
 import re
 import sqlite3
 import urllib.request
+import uuid
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 
 load_dotenv()
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, os.environ.get("DATABASE", "voice.db"))
+UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 app = FastAPI(title="Voice Booker")
 app.add_middleware(
@@ -109,6 +118,13 @@ def init_db():
         );
         """
     )
+    con.commit()
+    # lightweight migration for staged uploads (older DBs lack these columns)
+    cols = {r["name"] for r in con.execute("PRAGMA table_info(voicemails)").fetchall()}
+    if "audio_path" not in cols:
+        con.execute("ALTER TABLE voicemails ADD COLUMN audio_path TEXT NOT NULL DEFAULT ''")
+    if "filename" not in cols:
+        con.execute("ALTER TABLE voicemails ADD COLUMN filename TEXT NOT NULL DEFAULT ''")
     con.commit()
     if con.execute("SELECT COUNT(*) c FROM businesses").fetchone()["c"] == 0:
         cur = con.execute(
@@ -486,6 +502,107 @@ def process_voicemail(
             **result, "voicemail_id": vm_id}
 
 
+def safe_filename(name: str) -> str:
+    name = (name or "voicemail").strip().replace("\\", "/").split("/")[-1]
+    name = re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("._") or "voicemail"
+    return name[:80]
+
+
+def stage_voicemail_upload(
+    business_id: int = 1, file_bytes: bytes = b"",
+    filename: str = "voicemail.mp3", caller_phone: str = "",
+) -> dict:
+    """Step 1 of the dashboard flow: store the uploaded file, no AI yet.
+
+    Returns the voicemail row with status='pending'. The dashboard then runs
+    step 2 (AI extract) per file or for all pending files at once.
+    """
+    fname = safe_filename(filename)
+    stored = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}_{uuid.uuid4().hex[:8]}_{fname}"
+    audio_path = os.path.join(UPLOAD_DIR, stored)
+    with open(audio_path, "wb") as f:
+        f.write(file_bytes)
+    con = db()
+    cur = con.execute(
+        """INSERT INTO voicemails
+           (call_sid, recording_sid, business_id, from_phone, to_phone,
+            recording_url, transcript, status, appointment_id,
+            audio_path, filename, created_at)
+           VALUES ('','',?,?, '', '', '', 'pending', NULL, ?, ?, ?)""",
+        (business_id, caller_phone, audio_path, fname,
+         datetime.now().isoformat(timespec="seconds")),
+    )
+    con.commit()
+    row = con.execute("SELECT * FROM voicemails WHERE id = ?", (cur.lastrowid,)).fetchone()
+    con.close()
+    return {"ok": True, "status": "pending", "voicemail": dict(row)}
+
+
+def extract_voicemail(vm_id: int) -> dict:
+    """Step 2 of the dashboard flow: AI transcribe + extract + book one file."""
+    con = db()
+    row = con.execute("SELECT * FROM voicemails WHERE id = ?", (vm_id,)).fetchone()
+    con.close()
+    if not row:
+        return {"ok": False, "error": "voicemail not found", "voicemail_id": vm_id}
+    vm = dict(row)
+
+    text = (vm.get("transcript") or "").strip()
+    transcribed = False
+    if not text:
+        blob = None
+        fname = vm.get("filename") or "voicemail.mp3"
+        if vm.get("audio_path") and os.path.exists(vm["audio_path"]):
+            with open(vm["audio_path"], "rb") as f:
+                blob = f.read()
+        elif vm.get("recording_url"):
+            blob, fname = fetch_recording_bytes(vm["recording_url"])
+        if blob:
+            t = transcribe_audio_bytes(blob, fname)
+            if t:
+                text, transcribed = t, True
+
+    con = db()
+    if not text:
+        con.execute("UPDATE voicemails SET status = 'failed-no-transcript' WHERE id = ?", (vm_id,))
+        con.commit()
+        con.close()
+        hint = "audio could not be transcribed"
+        if not os.environ.get("OPENAI_API_KEY"):
+            hint += " — set OPENAI_API_KEY in backend/.env to enable Whisper transcription"
+        return {"ok": False, "error": hint, "transcript": "",
+                "transcribed": transcribed, "voicemail_id": vm_id}
+
+    result = run_booking(int(vm.get("business_id") or 1), text,
+                         caller_phone=vm.get("from_phone") or "",
+                         call_sid=vm.get("call_sid") or "", source="voicemail")
+    status = "processed" if result.get("appointment") else "failed-no-slots"
+    con.execute(
+        "UPDATE voicemails SET transcript = ?, status = ?, appointment_id = ? WHERE id = ?",
+        (text, status,
+         result["appointment"]["id"] if result.get("appointment") else None, vm_id),
+    )
+    con.commit()
+    updated = con.execute("SELECT * FROM voicemails WHERE id = ?", (vm_id,)).fetchone()
+    con.close()
+    return {"ok": True, "transcript": text, "transcribed": transcribed,
+            **result, "voicemail": dict(updated), "voicemail_id": vm_id}
+
+
+def extract_pending_voicemails(business_id: int = 1) -> dict:
+    """One AI button: go through every pending/failed voicemail and extract info."""
+    con = db()
+    rows = con.execute(
+        "SELECT id FROM voicemails WHERE business_id = ? AND status IN ('pending', 'failed-no-transcript')"
+        " ORDER BY id ASC",
+        (business_id,),
+    ).fetchall()
+    con.close()
+    results = [extract_voicemail(r["id"]) for r in rows]
+    done = sum(1 for r in results if r.get("ok") and r.get("appointment"))
+    return {"ok": True, "processed": len(results), "booked": done, "results": results}
+
+
 def twiml_say_gather(say: str, action: str = "/voice/process") -> str:
     return (
         '<?xml version="1.0" encoding="UTF-8"?>'
@@ -595,8 +712,10 @@ async def simulate_call(req: Request):
 def list_voicemails(business_id: int = 1):
     con = db()
     rows = con.execute(
-        "SELECT v.*, a.starts_at AS appointment_starts_at FROM voicemails v"
+        "SELECT v.*, a.starts_at AS appointment_starts_at, a.customer_name AS booked_name,"
+        " s.name AS service_name FROM voicemails v"
         " LEFT JOIN appointments a ON a.id = v.appointment_id"
+        " LEFT JOIN services s ON s.id = a.service_id"
         " WHERE v.business_id = ? ORDER BY v.id DESC LIMIT 200",
         (business_id,),
     ).fetchall()
@@ -624,15 +743,80 @@ async def voicemail_process(req: Request):
 async def voicemail_upload(
     file: UploadFile = File(...), business_id: int = 1, caller_phone: str = Form(default="")
 ):
-    """Upload a voicemail audio file -> Whisper transcribe -> book."""
+    """Step 1: upload a voicemail file. Stored as pending — no AI yet.
+
+    Run step 2 with POST /api/voicemail/{id}/extract (one file) or
+    POST /api/voicemail/extract-all (every pending file).
+    """
     audio = await file.read()
-    result = process_voicemail(
+    if not audio:
+        return {"ok": False, "error": "empty file"}
+    return stage_voicemail_upload(
         business_id=business_id,
-        audio_bytes=audio,
-        audio_filename=file.filename or "voicemail.mp3",
+        file_bytes=audio,
+        filename=file.filename or "voicemail.mp3",
         caller_phone=caller_phone,
     )
-    return result
+
+
+@app.post("/api/voicemails/upload")
+async def voicemails_upload(
+    files: list[UploadFile] = File(...), business_id: int = 1,
+):
+    """Step 1 for several files at once. Each stored as pending."""
+    out = []
+    for f in files:
+        audio = await f.read()
+        if not audio:
+            out.append({"ok": False, "error": "empty file", "filename": f.filename})
+            continue
+        out.append(stage_voicemail_upload(
+            business_id=business_id, file_bytes=audio,
+            filename=f.filename or "voicemail.mp3"))
+    return {"ok": True, "uploaded": len(out), "results": out}
+
+
+@app.post("/api/voicemail/{vm_id}/extract")
+def voicemail_extract(vm_id: int):
+    """Step 2 for one file: AI transcribe -> extract booking info -> book."""
+    return extract_voicemail(vm_id)
+
+
+@app.post("/api/voicemail/extract-all")
+async def voicemail_extract_all(req: Request):
+    """One AI button: go through every pending voicemail and extract info."""
+    try:
+        data = await req.json()
+    except Exception:
+        data = {}
+    return extract_pending_voicemails(int(data.get("business_id", 1)))
+
+
+@app.get("/api/voicemail/{vm_id}/audio")
+def voicemail_audio(vm_id: int):
+    """Stream the stored voicemail audio for in-browser playback."""
+    con = db()
+    row = con.execute("SELECT audio_path, filename FROM voicemails WHERE id = ?",
+                      (vm_id,)).fetchone()
+    con.close()
+    if not row or not row["audio_path"] or not os.path.exists(row["audio_path"]):
+        return PlainTextResponse("audio not found", status_code=404)
+    return FileResponse(row["audio_path"], filename=row["filename"] or "voicemail.mp3")
+
+
+@app.delete("/api/voicemail/{vm_id}")
+def voicemail_delete(vm_id: int):
+    con = db()
+    row = con.execute("SELECT audio_path FROM voicemails WHERE id = ?", (vm_id,)).fetchone()
+    if row and row["audio_path"] and os.path.exists(row["audio_path"]):
+        try:
+            os.remove(row["audio_path"])
+        except OSError:
+            pass
+    con.execute("DELETE FROM voicemails WHERE id = ?", (vm_id,))
+    con.commit()
+    con.close()
+    return {"ok": True}
 
 
 # ---------------- Twilio voice ----------------

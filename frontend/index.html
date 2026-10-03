@@ -3,137 +3,289 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Voice Booker — Dashboard</title>
+<title>Voice Booker — Voicemail to Booking</title>
 <style>
-  body { font-family: system-ui, sans-serif; background: #0f1115; color: #e8eaf0; margin: 0; }
-  header { padding: 20px 24px; border-bottom: 1px solid #222; display: flex; justify-content: space-between; align-items: center; }
-  main { display: grid; grid-template-columns: 1.2fr 1fr; gap: 16px; padding: 20px 24px; max-width: 1100px; margin: 0 auto; }
-  .card { background: #171a21; border: 1px solid #262b36; border-radius: 12px; padding: 16px; }
-  h2 { margin: 0 0 12px; font-size: 16px; }
-  table { width: 100%; border-collapse: collapse; font-size: 14px; }
-  td, th { padding: 8px; border-bottom: 1px solid #242a35; text-align: left; }
-  button { background: #5b8cff; color: white; border: 0; border-radius: 8px; padding: 8px 12px; cursor: pointer; }
-  button.ghost { background: #242b38; }
-  input, textarea, select { width: 100%; background: #0f1319; color: #e8eaf0; border: 1px solid #2a3140; border-radius: 8px; padding: 8px; margin: 4px 0 10px; }
-  .pill { font-size: 12px; padding: 2px 8px; border-radius: 20px; background: #233; }
-  .ok { color: #7ee2a8; } .muted { color: #9aa3b2; font-size: 13px; }
-  pre { background: #0c0f14; padding: 10px; border-radius: 8px; white-space: pre-wrap; font-size: 13px; }
-  @media (max-width: 800px) { main { grid-template-columns: 1fr; } }
+  :root {
+    --bg: #0e1016;
+    --panel: #161a23;
+    --panel-2: #1c212d;
+    --line: #262d3d;
+    --text: #e9ecf3;
+    --muted: #98a1b3;
+    --accent: #5b8cff;
+    --accent-2: #7c5cff;
+    --green: #3ecf8e;
+    --amber: #f5b544;
+    --red: #f26d6d;
+  }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; background: var(--bg); color: var(--text); margin: 0; }
+  header { position: sticky; top: 0; z-index: 10; background: rgba(14,16,22,.92); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); padding: 14px 24px; display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-size: 17px; font-weight: 650; }
+  .brand .logo { width: 32px; height: 32px; border-radius: 9px; background: linear-gradient(135deg, var(--accent), var(--accent-2)); display: flex; align-items: center; justify-content: center; font-size: 17px; }
+  .brand small { display: block; font-size: 12px; color: var(--muted); font-weight: 400; }
+  .hdr-right { display: flex; align-items: center; gap: 10px; }
+  .pill { font-size: 12px; padding: 4px 11px; border-radius: 20px; background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+  .pill.live { color: var(--green); border-color: rgba(62,207,142,.35); }
+  main { display: grid; grid-template-columns: 1.35fr 1fr; gap: 18px; padding: 22px 24px 40px; max-width: 1180px; margin: 0 auto; align-items: start; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 18px; }
+  .card h2 { margin: 0; font-size: 15px; font-weight: 650; }
+  .card .sub { margin: 6px 0 0; font-size: 13px; color: var(--muted); line-height: 1.5; }
+  .card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin-bottom: 14px; }
+  button { background: var(--accent); color: #fff; border: 0; border-radius: 9px; padding: 9px 14px; cursor: pointer; font-size: 13.5px; font-weight: 600; }
+  button:hover:not(:disabled) { filter: brightness(1.1); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.ghost { background: var(--panel-2); border: 1px solid var(--line); color: var(--text); font-weight: 500; }
+  button.danger-ghost { background: transparent; border: 1px solid var(--line); color: var(--muted); padding: 6px 10px; font-size: 12.5px; }
+  button.danger-ghost:hover { color: var(--red); border-color: var(--red); }
+  button.ai { background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+  .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
+  /* dropzone */
+  .drop { margin-top: 14px; border: 1.5px dashed #35405a; border-radius: 12px; padding: 26px 16px; text-align: center; cursor: pointer; transition: border-color .15s, background .15s; }
+  .drop:hover, .drop.over { border-color: var(--accent); background: rgba(91,140,255,.06); }
+  .drop .big { font-size: 26px; }
+  .drop p { margin: 8px 0 2px; font-size: 14px; }
+  .drop span { font-size: 12.5px; color: var(--muted); }
+  .file-pick { margin-top: 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .file-pick input[type=file] { font-size: 13px; color: var(--muted); }
+  .queue { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+  .queue .q { display: flex; justify-content: space-between; font-size: 13px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; }
+  /* voicemail items */
+  .vm-list { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
+  .vm { background: var(--panel-2); border: 1px solid var(--line); border-radius: 11px; padding: 12px 13px; }
+  .vm-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .vm-name { font-size: 13.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .vm-date { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .status { font-size: 11.5px; padding: 3px 10px; border-radius: 20px; white-space: nowrap; }
+  .status.pending { background: rgba(245,181,68,.14); color: var(--amber); border: 1px solid rgba(245,181,68,.4); }
+  .status.processed { background: rgba(62,207,142,.12); color: var(--green); border: 1px solid rgba(62,207,142,.4); }
+  .status.failed-no-transcript, .status.failed-no-slots { background: rgba(242,109,109,.12); color: var(--red); border: 1px solid rgba(242,109,109,.4); }
+  .vm audio { width: 100%; margin-top: 10px; height: 34px; }
+  .vm blockquote { margin: 10px 0 0; font-size: 13px; line-height: 1.55; color: #cfd6e2; border-left: 3px solid var(--accent); padding-left: 10px; }
+  .vm .booking { margin-top: 10px; font-size: 13px; background: rgba(62,207,142,.08); border: 1px solid rgba(62,207,142,.3); border-radius: 8px; padding: 8px 10px; }
+  .vm .booking b { color: var(--green); }
+  .vm-actions { display: flex; gap: 8px; margin-top: 10px; }
+  .vm-actions button { font-size: 12.5px; padding: 7px 12px; }
+  .empty { text-align: center; padding: 26px 12px; color: var(--muted); font-size: 13.5px; border: 1px dashed var(--line); border-radius: 11px; margin-top: 14px; }
+  .empty .big { font-size: 24px; display: block; margin-bottom: 6px; }
+  /* bookings table */
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  td, th { padding: 9px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+  th { font-size: 11.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); font-weight: 600; }
+  .muted { color: var(--muted); font-size: 12.5px; }
+  .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #232a3b; border: 1px solid var(--line); color: var(--text); font-size: 13.5px; padding: 11px 18px; border-radius: 10px; display: none; max-width: 90vw; box-shadow: 0 8px 30px rgba(0,0,0,.5); }
+  .toast.show { display: block; }
+  .toast.err { border-color: var(--red); }
+  details.wiring { margin-top: 18px; font-size: 13px; color: var(--muted); }
+  details.wiring summary { cursor: pointer; font-weight: 600; color: var(--text); font-size: 13.5px; }
+  details.wiring pre { background: #0b0e14; padding: 10px; border-radius: 8px; white-space: pre-wrap; font-size: 12.5px; border: 1px solid var(--line); }
+  .avail-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .avail-chips span { font-size: 12.5px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 7px; padding: 4px 9px; }
+  input[type=date] { background: #0f1319; color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; font-size: 13px; }
+  .spin { display: inline-block; width: 13px; height: 13px; border: 2px solid rgba(255,255,255,.35); border-top-color: #fff; border-radius: 50%; animation: sp .7s linear infinite; vertical-align: -2px; margin-right: 6px; }
+  @keyframes sp { to { transform: rotate(360deg); } }
+  @media (max-width: 860px) { main { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
 <header>
-  <div><strong>📞 Voice Booker</strong> <span class="muted" id="health">connecting…</span></div>
-  <div><button class="ghost" onclick="loadAll()">Refresh</button></div>
+  <div class="brand"><div class="logo">☎</div><div>Voice Booker<small id="bizName">Loading…</small></div></div>
+  <div class="hdr-right"><span class="pill" id="health">connecting…</span><button class="ghost" onclick="loadAll()">Refresh</button></div>
 </header>
 <main>
   <div>
     <div class="card">
-      <h2>Upcoming bookings</h2>
-      <table><thead><tr><th>When</th><th>Service</th><th>Customer</th><th></th></tr></thead>
-      <tbody id="appts"></tbody></table>
-    </div>
-    <div class="card" style="margin-top:16px">
-      <h2>Availability tomorrow</h2>
-      <div id="slots" class="muted">—</div>
+      <div class="card-head">
+        <div><h2>Voicemails</h2><p class="sub">Upload voicemail audio files, then run AI to transcribe each one and create the booking.</p></div>
+        <button class="ai" id="extractAllBtn" onclick="extractAll()">✨ AI Extract All</button>
+      </div>
+      <div class="drop" id="drop">
+        <div class="big">🎙️</div>
+        <p>Drag &amp; drop voicemail audio here, or click to browse</p>
+        <span>mp3, wav, m4a, ogg — you can select several at once</span>
+      </div>
+      <div class="file-pick">
+        <input type="file" id="fileInput" accept="audio/*" multiple />
+        <button id="uploadBtn" onclick="uploadSelected()" disabled>Upload</button>
+      </div>
+      <div class="queue" id="queue"></div>
+      <div class="vm-list" id="vms"></div>
     </div>
   </div>
   <div>
     <div class="card">
-      <h2>Test the voice agent (no phone needed)</h2>
-      <textarea id="transcript" rows="3">Hi, I want a haircut tomorrow at 3pm, my name is Alex</textarea>
-      <input id="phone" placeholder="Caller phone (optional)" value="+15551234567" />
-      <button onclick="simulate()">Simulate call</button>
-      <pre id="simOut" class="muted">Agent reply will appear here…</pre>
+      <div class="card-head"><div><h2>Bookings</h2><p class="sub">Created from voicemails by AI.</p></div></div>
+      <table><thead><tr><th>When</th><th>Details</th><th></th></tr></thead>
+      <tbody id="appts"></tbody></table>
     </div>
-    <div class="card" style="margin-top:16px">
-      <h2>Voicemail → auto-booking</h2>
-      <p class="muted">Paste a voicemail transcript, or upload the audio. AI extracts service + day + time and books it.</p>
-      <textarea id="vmTranscript" rows="3">Hi this is Priya, I need a color tomorrow morning, call me back at +15559876543</textarea>
-      <input id="vmPhone" placeholder="Caller phone (optional)" value="+15559876543" />
-      <button onclick="processVoicemail()">Process voicemail text</button>
-      <div style="margin-top:8px">
-        <input id="vmFile" type="file" accept="audio/*" />
-        <button class="ghost" onclick="uploadVoicemail()">Upload audio → transcribe + book</button>
-      </div>
-      <pre id="vmOut" class="muted">Voicemail result will appear here… (needs OPENAI_API_KEY for audio)</pre>
+    <div class="card" style="margin-top:18px">
+      <div class="card-head"><div><h2>Availability</h2></div><input type="date" id="availDate" onchange="loadAvailability()" /></div>
+      <div class="avail-chips" id="slots"><span class="muted">—</span></div>
     </div>
-    <div class="card" style="margin-top:16px">
-      <h2>Recent voicemails</h2>
-      <table><thead><tr><th>From</th><th>Transcript</th><th>Status</th></tr></thead>
-      <tbody id="vms"></tbody></table>
-    </div>
-    <div class="card" style="margin-top:16px">
-      <h2>Manual booking</h2>
-      <select id="svc"></select>
-      <input id="cname" placeholder="Customer name" />
-      <input id="cphone" placeholder="Customer phone" />
-      <input id="cwhen" type="datetime-local" />
-      <button onclick="bookManual()">Book</button>
-    </div>
-    <div class="card" style="margin-top:16px">
-      <h2>Twilio wiring</h2>
-      <p class="muted">1. Run backend + ngrok. 2. Twilio number → Voice webhook POST <code>/voice/incoming</code>. 3. Busy / no-answer webhook → POST <code>/voice/voicemail-greeting</code> (records, transcribes with Whisper, auto-books). 4. Call the number and say a booking — or let it ring to voicemail.</p>
+    <details class="wiring">
+      <summary>Phone wiring (Twilio)</summary>
+      <p>Point the number's voice webhook at <code>/voice/incoming</code> for live answering, and the busy / no-answer webhook at <code>/voice/voicemail-greeting</code> so missed calls are recorded, transcribed and booked automatically.</p>
       <pre>ngrok http 8000
-# live answer:
 https://&lt;ngrok&gt;.ngrok.io/voice/incoming
-# voicemail (busy/no-answer):
 https://&lt;ngrok&gt;.ngrok.io/voice/voicemail-greeting</pre>
-    </div>
+    </details>
   </div>
 </main>
+<div class="toast" id="toast"></div>
 <script>
 const API = 'http://127.0.0.1:8000';
+let selectedFiles = [];
+
+function toast(msg, isErr) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast show' + (isErr ? ' err' : '');
+  clearTimeout(t._h);
+  t._h = setTimeout(() => t.classList.remove('show'), 4200);
+}
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function fmtWhen(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return d.toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+function statusLabel(s) {
+  return { pending: 'pending', processed: 'booked ✓', 'failed-no-transcript': 'needs audio transcript', 'failed-no-slots': 'no slot found' }[s] || s;
+}
+
 async function loadAll() {
   const h = await fetch(API + '/api/health').then(r => r.json()).catch(() => null);
-  document.getElementById('health').textContent = h ? `● ${h.ai} mode` : '● backend offline — run uvicorn';
-  const ap = await fetch(API + '/api/appointments?business_id=1').then(r => r.json()).catch(() => ({appointments: []}));
-  document.getElementById('appts').innerHTML = ap.appointments.map(a => `<tr>
-    <td>${a.starts_at.replace('T',' ')}<br><span class="muted">${a.status}</span></td>
-    <td>${a.service_name || a.service_id || ''}</td>
-    <td>${a.customer_name}<br><span class="muted">${a.customer_phone}</span></td>
-    <td>${a.status === 'booked' ? `<button class="ghost" onclick="cancelAppt(${a.id})">Cancel</button>` : ''}</td>
-  </tr>`).join('') || '<tr><td colspan=4 class="muted">No bookings yet — simulate a call →</td></tr>';
-  const sv = await fetch(API + '/api/services?business_id=1').then(r => r.json()).catch(() => ({services: []}));
-  document.getElementById('svc').innerHTML = sv.services.map(s => `<option value="${s.id}">${s.name} (${s.duration_min}m)</option>`).join('');
-  const tmr = new Date(Date.now() + 864e5).toISOString().slice(0, 10);
-  const av = await fetch(API + `/api/availability?business_id=1&date=${tmr}T00:00:00`).then(r => r.json()).catch(() => null);
-  document.getElementById('slots').textContent = av ? av.slots.slice(0, 12).join(', ') + (av.slots.length > 12 ? ` +${av.slots.length - 12} more` : '') : '—';
-  const vm = await fetch(API + '/api/voicemails?business_id=1').then(r => r.json()).catch(() => ({voicemails: []}));
-  document.getElementById('vms').innerHTML = vm.voicemails.slice(0, 10).map(v => `<tr>
-    <td>${v.from_phone || '<span class="muted">unknown</span>'}<br><span class="muted">${v.appointment_starts_at ? v.appointment_starts_at.replace('T',' ') : ''}</span></td>
-    <td>${(v.transcript || '').slice(0, 90)}</td>
-    <td><span class="pill">${v.status}</span></td>
-  </tr>`).join('') || '<tr><td colspan=3 class="muted">No voicemails yet — process one above ↑</td></tr>';
+  const hb = document.getElementById('health');
+  if (h) { hb.textContent = '● ' + h.ai + (h.stt === 'whisper' ? ' + whisper' : ''); hb.classList.add('live'); }
+  else { hb.textContent = '● backend offline — run uvicorn in backend/'; hb.classList.remove('live'); }
+
+  const biz = await fetch(API + '/api/businesses').then(r => r.json()).catch(() => null);
+  if (biz && biz.businesses && biz.businesses[0]) document.getElementById('bizName').textContent = biz.businesses[0].name;
+
+  const ap = await fetch(API + '/api/appointments?business_id=1').then(r => r.json()).catch(() => ({ appointments: [] }));
+  const rows = (ap.appointments || []).filter(a => a.status === 'booked');
+  document.getElementById('appts').innerHTML = rows.map(a => '<tr>' +
+    '<td>' + esc(fmtWhen(a.starts_at)) + '</td>' +
+    '<td>' + esc(a.service_name || '') + '<br><span class="muted">' + esc(a.customer_name || '') + ' ' + esc(a.customer_phone || '') + '</span></td>' +
+    '<td><button class="danger-ghost" onclick="cancelAppt(' + a.id + ')">Cancel</button></td></tr>'
+  ).join('') || '<tr><td colspan="3" class="muted">No bookings yet — upload a voicemail and run AI Extract.</td></tr>';
+
+  const d = document.getElementById('availDate');
+  if (!d.value) d.value = new Date(Date.now() + 864e5).toISOString().slice(0, 10);
+  loadAvailability();
+  loadVoicemails();
 }
-async function simulate() {
-  const body = { business_id: 1, transcript: document.getElementById('transcript').value, caller_phone: document.getElementById('phone').value };
-  const r = await fetch(API + '/api/simulate-call', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) }).then(r => r.json());
-  document.getElementById('simOut').textContent = 'AGENT: ' + r.reply + '\n\nParsed: ' + JSON.stringify(r.parsed);
+
+async function loadAvailability() {
+  const d = document.getElementById('availDate').value;
+  const av = await fetch(API + '/api/availability?business_id=1&date=' + encodeURIComponent(d + 'T00:00:00')).then(r => r.json()).catch(() => null);
+  document.getElementById('slots').innerHTML = av && av.slots.length
+    ? av.slots.slice(0, 18).map(s => '<span>' + esc(s.slice(11)) + '</span>').join('') + (av.slots.length > 18 ? '<span class="muted">+' + (av.slots.length - 18) + ' more</span>' : '')
+    : '<span class="muted">No free slots that day.</span>';
+}
+
+async function loadVoicemails() {
+  const vm = await fetch(API + '/api/voicemails?business_id=1').then(r => r.json()).catch(() => ({ voicemails: [] }));
+  const list = vm.voicemails || [];
+  const pend = list.filter(v => v.status === 'pending' || v.status === 'failed-no-transcript').length;
+  const btn = document.getElementById('extractAllBtn');
+  btn.disabled = pend === 0;
+  btn.textContent = pend ? '✨ AI Extract All (' + pend + ')' : '✨ AI Extract All';
+
+  document.getElementById('vms').innerHTML = list.map(v => {
+    const title = esc(v.filename || (v.recording_url ? 'Phone recording' : 'Voicemail #' + v.id));
+    const hasAudio = v.audio_path || v.recording_url;
+    const needsAi = v.status === 'pending' || v.status === 'failed-no-transcript';
+    let body = '';
+    if (hasAudio) body += '<audio controls preload="none" src="' + API + '/api/voicemail/' + v.id + '/audio"></audio>';
+    if (v.transcript) body += '<blockquote>' + esc(v.transcript) + '</blockquote>';
+    if (v.appointment_id && v.appointment_starts_at)
+      body += '<div class="booking">📅 Booked: <b>' + esc(v.service_name || 'appointment') + '</b> — ' + esc(fmtWhen(v.appointment_starts_at)) + (v.booked_name ? ' for ' + esc(v.booked_name) : '') + '</div>';
+    else if (v.status === 'failed-no-slots') body += '<div class="booking" style="background:rgba(242,109,109,.07);border-color:rgba(242,109,109,.3)">No free slot found for this request.</div>';
+    else if (v.status === 'failed-no-transcript') body += '<div class="muted" style="margin-top:8px">Audio could not be transcribed. Add OPENAI_API_KEY in backend/.env for Whisper, then retry.</div>';
+    return '<div class="vm" id="vm-' + v.id + '"><div class="vm-top"><div><div class="vm-name">🎧 ' + title + '</div>' +
+      '<div class="vm-date">' + esc(fmtWhen(v.created_at)) + '</div></div>' +
+      '<span class="status ' + esc(v.status) + '">' + esc(statusLabel(v.status)) + '</span></div>' +
+      body +
+      '<div class="vm-actions">' +
+      (needsAi ? '<button class="ai" onclick="extractOne(' + v.id + ', this)">✨ AI Extract</button>' : '') +
+      '<button class="danger-ghost" onclick="deleteVm(' + v.id + ')">Delete</button></div></div>';
+  }).join('') || '<div class="empty"><span class="big">📭</span>No voicemails yet.<br>Upload an audio file above to get started.</div>';
+}
+
+// ---- upload (single way in) ----
+const drop = document.getElementById('drop');
+const fileInput = document.getElementById('fileInput');
+drop.addEventListener('click', () => fileInput.click());
+drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
+drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+drop.addEventListener('drop', e => { e.preventDefault(); drop.classList.remove('over'); addFiles(e.dataTransfer.files); });
+fileInput.addEventListener('change', () => { addFiles(fileInput.files); fileInput.value = ''; });
+
+function addFiles(files) {
+  for (const f of files) selectedFiles.push(f);
+  renderQueue();
+}
+function renderQueue() {
+  document.getElementById('uploadBtn').disabled = selectedFiles.length === 0;
+  document.getElementById('uploadBtn').textContent = selectedFiles.length ? 'Upload (' + selectedFiles.length + ')' : 'Upload';
+  document.getElementById('queue').innerHTML = selectedFiles.map((f, i) =>
+    '<div class="q"><span>🎧 ' + esc(f.name) + ' <span class="muted">(' + Math.round(f.size / 1024) + ' KB)</span></span><button class="danger-ghost" onclick="removeQueued(' + i + ')">Remove</button></div>'
+  ).join('');
+}
+function removeQueued(i) { selectedFiles.splice(i, 1); renderQueue(); }
+
+async function uploadSelected() {
+  if (!selectedFiles.length) return;
+  const btn = document.getElementById('uploadBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span>Uploading…';
+  try {
+    const fd = new FormData();
+    if (selectedFiles.length === 1) {
+      fd.append('file', selectedFiles[0]);
+      const r = await fetch(API + '/api/voicemail/upload?business_id=1', { method: 'POST', body: fd }).then(r => r.json());
+      if (!r.ok) throw new Error(r.error || 'upload failed');
+    } else {
+      for (const f of selectedFiles) fd.append('files', f);
+      const r = await fetch(API + '/api/voicemails/upload?business_id=1', { method: 'POST', body: fd }).then(r => r.json());
+      if (!r.ok) throw new Error('upload failed');
+    }
+    selectedFiles = [];
+    renderQueue();
+    toast('Uploaded — press AI Extract on a voicemail, or AI Extract All.');
+    loadVoicemails();
+  } catch (e) { toast('Upload failed: ' + e.message, true); }
+  btn.disabled = selectedFiles.length === 0;
+  btn.textContent = 'Upload';
+}
+
+// ---- AI (the only processing buttons) ----
+async function extractOne(id, btn) {
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spin"></span>Extracting…'; }
+  const r = await fetch(API + '/api/voicemail/' + id + '/extract', { method: 'POST' }).then(r => r.json()).catch(() => null);
+  if (!r) toast('Backend unreachable.', true);
+  else if (r.ok && r.appointment) toast('Booked: ' + (r.appointment.customer_name || '') + ' — ' + (r.reply || ''));
+  else toast('Could not book: ' + (r.error || 'no slot found'), true);
+  loadVoicemails();
   loadAll();
 }
-async function processVoicemail() {
-  const body = { business_id: 1, transcript: document.getElementById('vmTranscript').value, caller_phone: document.getElementById('vmPhone').value };
-  const r = await fetch(API + '/api/voicemail/process', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) }).then(r => r.json());
-  document.getElementById('vmOut').textContent = r.ok ? 'TRANSCRIPT: ' + r.transcript + '\n\nAGENT: ' + r.reply + '\n\nParsed: ' + JSON.stringify(r.parsed) : 'ERROR: ' + (r.error || 'no transcript');
+
+async function extractAll() {
+  const btn = document.getElementById('extractAllBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin"></span>Running AI…';
+  const r = await fetch(API + '/api/voicemail/extract-all', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ business_id: 1 }) }).then(r => r.json()).catch(() => null);
+  if (!r) toast('Backend unreachable.', true);
+  else toast('AI went through ' + r.processed + ' voicemail(s), booked ' + r.booked + '.');
   loadAll();
 }
-async function uploadVoicemail() {
-  const f = document.getElementById('vmFile').files[0];
-  if (!f) { document.getElementById('vmOut').textContent = 'Pick an audio file first.'; return; }
-  const fd = new FormData();
-  fd.append('file', f);
-  fd.append('business_id', '1');
-  fd.append('caller_phone', document.getElementById('vmPhone').value);
-  const r = await fetch(API + '/api/voicemail/upload?business_id=1', { method: 'POST', body: fd }).then(r => r.json());
-  document.getElementById('vmOut').textContent = r.ok ? 'TRANSCRIPT: ' + r.transcript + (r.transcribed ? ' (whisper)' : '') + '\n\nAGENT: ' + r.reply : 'ERROR: ' + (r.error || JSON.stringify(r));
-  loadAll();
-}
-async function bookManual() {
-  const sid = document.getElementById('svc').value;
-  await fetch(API + '/api/appointments', { method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ business_id: 1, service_id: Number(sid), customer_name: document.getElementById('cname').value, customer_phone: document.getElementById('cphone').value, starts_at: document.getElementById('cwhen').value }) });
-  loadAll();
+
+async function deleteVm(id) {
+  await fetch(API + '/api/voicemail/' + id, { method: 'DELETE' });
+  loadVoicemails();
 }
 async function cancelAppt(id) {
   await fetch(API + '/api/appointments/' + id, { method: 'DELETE' });
