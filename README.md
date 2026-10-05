@@ -1,62 +1,51 @@
-# 📞 AI Voice Booker for Services
+# 📞 AI Voice Booker — Voicemail to Booking
 
-AI receptionist that answers calls, books appointments, and shows them on a dashboard.
-Works **today with zero API keys** (offline rules), upgrades to OpenAI + Twilio when you're ready to charge.
+Upload voicemail audio files. On-device AI transcribes the conversation,
+pulls out service + day + time + name, and creates the booking.
+**No API keys required.**
 
-## What you got
+## How it works
 
 ```
-voice-booker/
-  backend/app.py          # FastAPI: dashboard API + Twilio voice webhooks + booking brain
-  backend/requirements.txt
-  backend/.env.example
-  frontend/index.html     # Dashboard: bookings, availability, call simulator
+1. Upload  →  dashboard dropzone  →  stored as "pending"
+2. AI       →  ✨ AI Extract (one file) or ✨ AI Extract All (every file)
+               faster-whisper transcribes → rules/LLM extract → slot search → booked
+3. Bookings →  appear in the dashboard
 ```
 
-Key endpoints:
-- `GET /api/health` — `offline-rules` vs `openai` mode
-- `GET /api/appointments` `POST /api/appointments` `DELETE /api/appointments/{id}`
-- `GET /api/availability?date=...` — free 30-min slots
-- `POST /api/simulate-call` — test voice agent without a phone: `{"transcript": "haircut tomorrow at 3pm, I'm Alex"}`
-- `POST /voice/incoming` + `POST /voice/process` — Twilio webhooks (TwiML)
+Missed phone calls work too: Twilio records the caller, posts the audio,
+and the same AI pipeline books it.
 
-## Quickstart (2 min)
+## Quickstart
 
 ```bash
 cd voice-booker/backend
 python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env
-uvicorn app:app --reload --port 8000
-# open ../frontend/index.html in browser
+pip install -r requirements.txt     # includes faster-whisper (on-device STT)
+uvicorn app:app --host 127.0.0.1 --port 8000
+# serve the dashboard (new terminal):
+cd ../frontend && python3 -m http.server 5502
+# open http://127.0.0.1:5502
 ```
 
-Try in dashboard → "Simulate call":
-> "Hi, I want a haircut tomorrow at 3pm, my name is Alex"
+First AI run downloads the Whisper `base` model (~145 MB, one time).
+Override with `WHISPER_MODEL=tiny|small|medium` in `backend/.env`.
 
-## Go live with real calls (Twilio, ~15 min)
+## Endpoints
 
-1. `ngrok http 8000`
-2. Twilio Console → Phone Number → Voice webhook: `POST https://<ngrok>.ngrok.io/voice/incoming`
-3. Call the number, say a service + day + time.
-4. Booking appears in dashboard + `voice.db`.
+- `GET /api/health` — `ai` (openai/offline-rules) + `stt` engine + twilio flag
+- `POST /api/voicemail/upload` — one audio file → pending
+- `POST /api/voicemails/upload` — several files → pending
+- `POST /api/voicemail/{id}/extract` — AI on one file
+- `POST /api/voicemail/extract-all` — AI over every pending file
+- `GET /api/voicemail/{id}/audio` — playback, `DELETE` — remove
+- `GET /api/appointments` `DELETE /api/appointments/{id}` — bookings
+- `GET /api/availability?date=...` — free slots
+- `POST /api/simulate-call` — text-only test: `{"transcript": "..."}`
+- `POST /voice/incoming` + `POST /voice/voicemail-greeting` + `POST /voice/voicemail` — Twilio
 
-Add to `.env` when ready:
-```
-OPENAI_API_KEY=sk-...      # better extraction than rules
-TWILIO_ACCOUNT_SID=...     # for SMS confirmations (next step)
-TWILIO_AUTH_TOKEN=...
-```
+## Going further
 
-## SaaS roadmap (to first $)
-
-1. **Week 1:** multi-business auth, Google Calendar sync (`backend/app.py: calendar placeholder`), SMS confirm via Twilio.
-2. **Week 2:** Stripe: $99/mo + $0.15/min. Add `businesses.stripe_id`, gate `/voice/*` on subscription.
-3. **Advanced (your goal):** swap `free_slots()` to Postgres + pgvector, realtime voice with LiveKit/Twilio Media Streams, eval harness on `calls` table (booking accuracy %).
-
-Sell it locally: dentists, barbers, cleaners. Pitch: "never miss a booking — $99/mo, free 7-day trial on your own number."
-
-## Upgrade hints
-
-- `run_booking()` is the whole agent — LLM extraction (`try_openai_extract`) → slot search (`free_slots`) → SQLite write. Replace rules with LangGraph here.
-- `calls` table = training data for evals. Log every transcript + outcome.
+- Add `OPENAI_API_KEY` to `backend/.env` for cloud Whisper fallback + smarter LLM extraction.
+- `ngrok http 8000`, then set the Twilio number webhooks to `/voice/incoming`
+  (answer) and `/voice/voicemail-greeting` (busy/no-answer → record → auto-book).

@@ -6,17 +6,10 @@
 <title>Voice Booker — Voicemail to Booking</title>
 <style>
   :root {
-    --bg: #0e1016;
-    --panel: #161a23;
-    --panel-2: #1c212d;
-    --line: #262d3d;
-    --text: #e9ecf3;
-    --muted: #98a1b3;
-    --accent: #5b8cff;
-    --accent-2: #7c5cff;
-    --green: #3ecf8e;
-    --amber: #f5b544;
-    --red: #f26d6d;
+    --bg: #0e1016; --panel: #161a23; --panel-2: #1c212d; --line: #262d3d;
+    --text: #e9ecf3; --muted: #98a1b3;
+    --accent: #5b8cff; --accent-2: #7c5cff;
+    --green: #3ecf8e; --amber: #f5b544; --red: #f26d6d;
   }
   * { box-sizing: border-box; }
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; background: var(--bg); color: var(--text); margin: 0; }
@@ -39,8 +32,6 @@
   button.danger-ghost { background: transparent; border: 1px solid var(--line); color: var(--muted); padding: 6px 10px; font-size: 12.5px; }
   button.danger-ghost:hover { color: var(--red); border-color: var(--red); }
   button.ai { background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
-  .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
-  /* dropzone */
   .drop { margin-top: 14px; border: 1.5px dashed #35405a; border-radius: 12px; padding: 26px 16px; text-align: center; cursor: pointer; transition: border-color .15s, background .15s; }
   .drop:hover, .drop.over { border-color: var(--accent); background: rgba(91,140,255,.06); }
   .drop .big { font-size: 26px; }
@@ -49,8 +40,7 @@
   .file-pick { margin-top: 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .file-pick input[type=file] { font-size: 13px; color: var(--muted); }
   .queue { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
-  .queue .q { display: flex; justify-content: space-between; font-size: 13px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; }
-  /* voicemail items */
+  .queue .q { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 13px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; }
   .vm-list { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
   .vm { background: var(--panel-2); border: 1px solid var(--line); border-radius: 11px; padding: 12px 13px; }
   .vm-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
@@ -62,13 +52,13 @@
   .status.failed-no-transcript, .status.failed-no-slots { background: rgba(242,109,109,.12); color: var(--red); border: 1px solid rgba(242,109,109,.4); }
   .vm audio { width: 100%; margin-top: 10px; height: 34px; }
   .vm blockquote { margin: 10px 0 0; font-size: 13px; line-height: 1.55; color: #cfd6e2; border-left: 3px solid var(--accent); padding-left: 10px; }
+  .vm .engine { font-size: 11.5px; color: var(--muted); margin-top: 6px; }
   .vm .booking { margin-top: 10px; font-size: 13px; background: rgba(62,207,142,.08); border: 1px solid rgba(62,207,142,.3); border-radius: 8px; padding: 8px 10px; }
   .vm .booking b { color: var(--green); }
   .vm-actions { display: flex; gap: 8px; margin-top: 10px; }
   .vm-actions button { font-size: 12.5px; padding: 7px 12px; }
   .empty { text-align: center; padding: 26px 12px; color: var(--muted); font-size: 13.5px; border: 1px dashed var(--line); border-radius: 11px; margin-top: 14px; }
   .empty .big { font-size: 24px; display: block; margin-bottom: 6px; }
-  /* bookings table */
   table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
   td, th { padding: 9px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
   th { font-size: 11.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); font-weight: 600; }
@@ -96,13 +86,13 @@
   <div>
     <div class="card">
       <div class="card-head">
-        <div><h2>Voicemails</h2><p class="sub">Upload voicemail audio files, then run AI to transcribe each one and create the booking.</p></div>
+        <div><h2>Voicemails</h2><p class="sub" id="sttNote">Upload voicemail audio. AI transcribes the conversation and books the appointment.</p></div>
         <button class="ai" id="extractAllBtn" onclick="extractAll()">✨ AI Extract All</button>
       </div>
       <div class="drop" id="drop">
         <div class="big">🎙️</div>
         <p>Drag &amp; drop voicemail audio here, or click to browse</p>
-        <span>mp3, wav, m4a, ogg — you can select several at once</span>
+        <span>mp3, wav, m4a, ogg — select several at once</span>
       </div>
       <div class="file-pick">
         <input type="file" id="fileInput" accept="audio/*" multiple />
@@ -152,14 +142,21 @@ function fmtWhen(iso) {
   return d.toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 function statusLabel(s) {
-  return { pending: 'pending', processed: 'booked ✓', 'failed-no-transcript': 'needs audio transcript', 'failed-no-slots': 'no slot found' }[s] || s;
+  return { pending: 'pending', processed: 'booked ✓', 'failed-no-transcript': 'not understood', 'failed-no-slots': 'no slot found' }[s] || s;
 }
 
 async function loadAll() {
   const h = await fetch(API + '/api/health').then(r => r.json()).catch(() => null);
   const hb = document.getElementById('health');
-  if (h) { hb.textContent = '● ' + h.ai + (h.stt === 'whisper' ? ' + whisper' : ''); hb.classList.add('live'); }
-  else { hb.textContent = '● backend offline — run uvicorn in backend/'; hb.classList.remove('live'); }
+  if (h) {
+    hb.textContent = '● ' + h.ai + ' · ' + h.stt;
+    hb.classList.add('live');
+    document.getElementById('sttNote').textContent =
+      'Upload voicemail audio. AI (' + h.stt + ') transcribes the conversation and books the appointment.';
+  } else {
+    hb.textContent = '● backend offline — run uvicorn in backend/';
+    hb.classList.remove('live');
+  }
 
   const biz = await fetch(API + '/api/businesses').then(r => r.json()).catch(() => null);
   if (biz && biz.businesses && biz.businesses[0]) document.getElementById('bizName').textContent = biz.businesses[0].name;
@@ -204,7 +201,6 @@ async function loadVoicemails() {
     if (v.appointment_id && v.appointment_starts_at)
       body += '<div class="booking">📅 Booked: <b>' + esc(v.service_name || 'appointment') + '</b> — ' + esc(fmtWhen(v.appointment_starts_at)) + (v.booked_name ? ' for ' + esc(v.booked_name) : '') + '</div>';
     else if (v.status === 'failed-no-slots') body += '<div class="booking" style="background:rgba(242,109,109,.07);border-color:rgba(242,109,109,.3)">No free slot found for this request.</div>';
-    else if (v.status === 'failed-no-transcript') body += '<div class="muted" style="margin-top:8px">Audio could not be transcribed. Add OPENAI_API_KEY in backend/.env for Whisper, then retry.</div>';
     return '<div class="vm" id="vm-' + v.id + '"><div class="vm-top"><div><div class="vm-name">🎧 ' + title + '</div>' +
       '<div class="vm-date">' + esc(fmtWhen(v.created_at)) + '</div></div>' +
       '<span class="status ' + esc(v.status) + '">' + esc(statusLabel(v.status)) + '</span></div>' +
@@ -215,7 +211,6 @@ async function loadVoicemails() {
   }).join('') || '<div class="empty"><span class="big">📭</span>No voicemails yet.<br>Upload an audio file above to get started.</div>';
 }
 
-// ---- upload (single way in) ----
 const drop = document.getElementById('drop');
 const fileInput = document.getElementById('fileInput');
 drop.addEventListener('click', () => fileInput.click());
@@ -243,12 +238,13 @@ async function uploadSelected() {
   btn.disabled = true;
   btn.innerHTML = '<span class="spin"></span>Uploading…';
   try {
-    const fd = new FormData();
     if (selectedFiles.length === 1) {
+      const fd = new FormData();
       fd.append('file', selectedFiles[0]);
       const r = await fetch(API + '/api/voicemail/upload?business_id=1', { method: 'POST', body: fd }).then(r => r.json());
       if (!r.ok) throw new Error(r.error || 'upload failed');
     } else {
+      const fd = new FormData();
       for (const f of selectedFiles) fd.append('files', f);
       const r = await fetch(API + '/api/voicemails/upload?business_id=1', { method: 'POST', body: fd }).then(r => r.json());
       if (!r.ok) throw new Error('upload failed');
@@ -262,14 +258,12 @@ async function uploadSelected() {
   btn.textContent = 'Upload';
 }
 
-// ---- AI (the only processing buttons) ----
 async function extractOne(id, btn) {
   if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spin"></span>Extracting…'; }
   const r = await fetch(API + '/api/voicemail/' + id + '/extract', { method: 'POST' }).then(r => r.json()).catch(() => null);
   if (!r) toast('Backend unreachable.', true);
   else if (r.ok && r.appointment) toast('Booked: ' + (r.appointment.customer_name || '') + ' — ' + (r.reply || ''));
   else toast('Could not book: ' + (r.error || 'no slot found'), true);
-  loadVoicemails();
   loadAll();
 }
 

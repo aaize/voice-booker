@@ -4,3 +4,6 @@ python-dotenv>=1.0
 python-multipart>=0.0.9
 twilio>=9.0
 openai>=1.30
+# On-device speech-to-text (no API key needed). Optional but recommended:
+# pip install faster-whisper
+faster-whisper>=1.0
